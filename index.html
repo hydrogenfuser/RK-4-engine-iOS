@@ -1,0 +1,209 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+  <meta name="apple-mobile-web-app-title" content="Orbit Sim">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  
+  <title>Orbital Simulator</title>
+  
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
+
+  <style>
+    body {
+      margin: 0;
+      padding: 0;
+      overflow: hidden;
+      background-color: #050510;
+      touch-action: none;
+    }
+    canvas {
+      display: block;
+    }
+  </style>
+</head>
+<body>
+  <script>
+    // --- PHYSICS CONSTANTS ---
+    const G_MU = 800000;         
+    const R_PLANET = 50;         
+    const R_ATMOS = 75;          
+    const ATMOS_DENSITY = 0.008; 
+    const J2 = 0.0108263;        
+
+    const MOON_MU = 80000;       
+    const MOON_RADIUS = 15;
+    const MOON_ORBIT_R = 1350;   
+    const MOON_ORBIT_SPEED = 0.015;
+    const MOON_SOI = MOON_ORBIT_R * Math.pow(MOON_MU / (3 * G_MU), 1/3); 
+
+    let r, v; 
+    let ship = { dryMass: 1000, fuelMass: 2500, thrust: 45000, isp: 320 };
+    const g0 = 9.81;             
+
+    let timeSim = 0;
+    let camPos, zoom = 0.3; 
+    const warpLevels = [0, 1, 10, 50, 200];
+    let warpIndex = 1; 
+    let breadcrumbs = [];
+    let closestDist = Infinity;
+    let closestPos = null;
+    let closestMoonPos = null;
+    let prevTouchDist = 0;
+
+    function setup() {
+      createCanvas(windowWidth, windowHeight);
+      r = createVector(0, -150);
+      let circularV = sqrt(G_MU / r.mag());
+      v = createVector(circularV + 2, 0); 
+      camPos = createVector(0, 0);
+    }
+
+    function keyPressed() {
+      if (keyCode === 190 && warpIndex < warpLevels.length - 1) warpIndex++; 
+      if (keyCode === 188 && warpIndex > 0) warpIndex--;                     
+    }
+
+    function mouseWheel(event) {
+      zoom *= (1 - event.delta * 0.001);
+      zoom = constrain(zoom, 0.02, 5); 
+      return false; 
+    }
+
+    function touchStarted() {
+      if (touches.length === 2) {
+        prevTouchDist = dist(touches[0].x, touches[0].y, touches[1].x, touches[1].y);
+      }
+      return false; 
+    }
+
+    function touchMoved() {
+      if (touches.length === 2) {
+        let currentTouchDist = dist(touches[0].x, touches[0].y, touches[1].x, touches[1].y);
+        let zoomDelta = currentTouchDist - prevTouchDist;
+        zoom *= (1 + zoomDelta * 0.005);
+        zoom = constrain(zoom, 0.02, 5);
+        prevTouchDist = currentTouchDist;
+      }
+      return false; 
+    }
+
+    function getAcc(pos, vel, t) {
+      let acc = createVector(0, 0);
+      let rMag = pos.mag();
+      let rMagSq = pos.magSq();
+      acc.sub(p5.Vector.mult(pos, G_MU / (rMagSq * rMag)));
+      let j2Force = (1.5 * J2 * (R_PLANET**2) / rMagSq) * (G_MU / rMagSq);
+      acc.sub(p5.Vector.mult(pos.copy().normalize(), j2Force));
+
+      if (rMag < R_ATMOS && rMag > R_PLANET) {
+        let altitude = rMag - R_PLANET;
+        let density = exp(-altitude / 10) * ATMOS_DENSITY;
+        let drag = vel.copy().mult(-1).normalize().mult(vel.magSq() * density);
+        acc.add(drag);
+      }
+
+      let mPos = createVector(cos(t * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(t * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
+      let rToM = p5.Vector.sub(mPos, pos); 
+      acc.add(p5.Vector.mult(rToM, MOON_MU / (rToM.mag()**3)));
+      return acc;
+    }
+
+    function rk4Step(pos, vel, t, dt_step) {
+      let k1_v = getAcc(pos, vel, t);
+      let k1_r = vel.copy();
+      let p2 = p5.Vector.add(pos, p5.Vector.mult(k1_r, dt_step / 2));
+      let v2 = p5.Vector.add(vel, p5.Vector.mult(k1_v, dt_step / 2));
+      let k2_v = getAcc(p2, v2, t + dt_step/2);
+      let k2_r = v2.copy();
+      let p3 = p5.Vector.add(pos, p5.Vector.mult(k2_r, dt_step / 2));
+      let v3 = p5.Vector.add(vel, p5.Vector.mult(k2_v, dt_step / 2));
+      let k3_v = getAcc(p3, v3, t + dt_step/2);
+      let k3_r = v3.copy();
+      let p4 = p5.Vector.add(pos, p5.Vector.mult(k3_r, dt_step));
+      let v4 = p5.Vector.add(vel, p5.Vector.mult(k3_v, dt_step));
+      let k4_v = getAcc(p4, v4, t + dt_step);
+      let k4_r = v4.copy();
+
+      let v_out = p5.Vector.add(vel, p5.Vector.mult(p5.Vector.add(k1_v, p5.Vector.mult(k2_v, 2)).add(p5.Vector.mult(k3_v, 2)).add(k4_v), dt_step / 6));
+      let r_out = p5.Vector.add(pos, p5.Vector.mult(p5.Vector.add(k1_r, p5.Vector.mult(k2_r, 2)).add(p5.Vector.mult(k3_r, 2)).add(k4_r), dt_step / 6));
+      return {r: r_out, v: v_out};
+    }
+
+    function draw() {
+      background(5, 5, 10); 
+      let currentWarp = warpLevels[warpIndex];
+      let dt = 0.008; 
+
+      for (let s = 0; s < currentWarp; s++) {
+        let isBurning = false;
+        let burnDir = createVector(0,0);
+        if (ship.fuelMass > 0 && currentWarp <= 1) { 
+          if (keyIsDown(87)) { burnDir = v.copy().normalize(); isBurning = true; }
+          if (keyIsDown(83)) { burnDir = v.copy().normalize().mult(-1); isBurning = true; }
+          if (keyIsDown(65)) { burnDir = r.copy().normalize().mult(-1); isBurning = true; }
+          if (keyIsDown(68)) { burnDir = r.copy().normalize(); isBurning = true; }
+        }
+        if (isBurning) {
+          ship.fuelMass -= (ship.thrust / (ship.isp * g0)) * dt;
+          v.add(p5.Vector.mult(burnDir, (ship.thrust / (ship.dryMass + ship.fuelMass)) * dt));
+        }
+        let nextState = rk4Step(r, v, timeSim, dt);
+        r = nextState.r; v = nextState.v; timeSim += dt;
+      }
+
+      if (frameCount % 10 === 0 && currentWarp > 0) breadcrumbs.push(r.copy());
+      if (breadcrumbs.length > 200) breadcrumbs.shift();
+
+      let sR = r.copy(), sV = v.copy(), sT = timeSim;
+      let traj = [], trajRel = [];
+      closestDist = Infinity;
+
+      for(let i = 0; i < 2000; i++) {
+        traj.push(sR.copy());
+        let mPos = createVector(cos(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
+        let dM = p5.Vector.dist(sR, mPos);
+        if (dM < closestDist) { closestDist = dM; closestPos = sR.copy(); closestMoonPos = mPos.copy(); }
+        if (dM < MOON_SOI) trajRel.push(p5.Vector.sub(sR, mPos));
+        else if (trajRel.length > 0 && trajRel[trajRel.length-1] !== null) trajRel.push(null);
+        let sDt = (dM < MOON_SOI || sR.mag() < R_ATMOS * 2) ? 0.2 : 0.8;
+        let nextSim = rk4Step(sR, sV, sT, sDt);
+        sR = nextSim.r; sV = nextSim.v; sT += sDt;
+        if (sR.mag() < R_PLANET || dM < MOON_RADIUS) break;
+      }
+
+      push();
+      translate(width/2, height/2); scale(zoom); translate(-camPos.x, -camPos.y);
+      fill(50, 150, 255, 30); noStroke(); circle(0, 0, R_ATMOS * 2);
+      fill(255); circle(0,0, R_PLANET * 2); 
+      let mPosNow = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
+      let inSOI = p5.Vector.dist(r, mPosNow) < MOON_SOI;
+      stroke(100, 200, 255, 50); noFill(); circle(mPosNow.x, mPosNow.y, MOON_SOI * 2);
+      fill(200); noStroke(); circle(mPosNow.x, mPosNow.y, MOON_RADIUS * 2);
+      noFill(); strokeWeight(1.5/zoom);
+      stroke(255, 105, 180, inSOI ? 50 : 180); beginShape(); traj.forEach(p => vertex(p.x, p.y)); endShape();
+      stroke(100, 200, 255); beginShape(); trajRel.forEach(p => p ? vertex(mPosNow.x+p.x, mPosNow.y+p.y) : endShape() || beginShape()); endShape();
+      if (closestDist < MOON_SOI * 2) {
+        stroke(255, 255, 0, 150); drawingContext.setLineDash([5, 5]);
+        line(closestPos.x, closestPos.y, closestMoonPos.x, closestMoonPos.y);
+        drawingContext.setLineDash([]);
+      }
+      if (inSOI) { camPos.x = lerp(camPos.x, mPosNow.x, 0.05); camPos.y = lerp(camPos.y, mPosNow.y, 0.05); }
+      else { camPos.x = lerp(camPos.x, r.x, 0.05); camPos.y = lerp(camPos.y, r.y, 0.05); }
+      fill(255, 0, 0); circle(r.x, r.y, 4/zoom);
+      if (r.mag() < R_ATMOS && r.mag() > R_PLANET) { stroke(255, 255, 255, 100); noFill(); circle(r.x, r.y, 8/zoom); }
+      pop();
+
+      fill(255); textSize(14); textAlign(LEFT, TOP); noStroke();
+      text(`WARP: ${currentWarp}x  |  FUEL: ${ship.fuelMass.toFixed(0)}kg`, 20, 50);
+      if (closestDist < MOON_SOI * 1.5) {
+        fill(255, 255, 0);
+        text(`LUNAR APPROACH: ${(closestDist - MOON_RADIUS).toFixed(1)}m`, width - 250, 50);
+      }
+    }
+    function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+  </script>
+</body>
+</html>
