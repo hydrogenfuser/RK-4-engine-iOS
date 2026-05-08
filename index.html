@@ -102,7 +102,6 @@
       for (let s = 0; s < currentWarp * subSteps; s++) {
         let stepSize = dt / subSteps;
         if (!isCrashed) {
-          // Manual Controls (Now allowed during Warp and heavily boosted)
           let thrustPower = 30.0; 
           if (keyIsDown(87)) v.add(v.copy().normalize().mult(thrustPower * stepSize));
           if (keyIsDown(83)) v.add(v.copy().normalize().mult(-thrustPower * stepSize));
@@ -124,13 +123,13 @@
       }
       if (reentryTrail.length > 500) reentryTrail.shift();
 
-      // --- PREDICTION (SMART SINGLE LOOP) ---
+      // --- PREDICTION (ULTRA SMOOTH, CONTINUOUS) ---
       let sR = r.copy(), sV = v.copy(), sT = timeSim, traj = [];
       ap = 0; pe = Infinity;
-      let totalAngle = 0, prevAngle = 0, domBody = '';
 
       if (!isCrashed) {
-        for(let i=0; i<4000; i++) {
+        // Increased iterations and smaller step sizes for much smoother lines
+        for(let i=0; i<6000; i++) {
           traj.push(sR.copy());
           let dist = sR.mag();
           if (dist > ap) ap = dist; if (dist < pe) pe = dist;
@@ -138,34 +137,15 @@
           let mP = createVector(cos(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
           let dM = p5.Vector.dist(sR, mP);
           
-          // Angle Tracker: Break the loop if we complete exactly one orbit
-          let curDom = dM < MOON_SOI ? 'moon' : 'earth';
-          let center = curDom === 'moon' ? mP : createVector(0,0);
-          let curAng = p5.Vector.sub(sR, center).heading();
-          
-          if (i === 0) { 
-            prevAngle = curAng; domBody = curDom; 
-          } else {
-            if (curDom !== domBody) { 
-              domBody = curDom; prevAngle = curAng; totalAngle = 0; 
-            } else {
-              let dTh = curAng - prevAngle;
-              while(dTh > Math.PI) dTh -= TWO_PI;
-              while(dTh < -Math.PI) dTh += TWO_PI;
-              totalAngle += dTh;
-              prevAngle = curAng;
-              if (Math.abs(totalAngle) >= TWO_PI - 0.05) {
-                traj.push(sR.copy()); 
-                break; // One full orbit drawn! Stop predicting.
-              }
-            }
-          }
-
-          let step = (dM < MOON_SOI || sR.mag() < R_ATMOS * 2) ? 0.08 : 0.6;
+          // Smaller step thresholds ensure tight grouping of vertices
+          let step = (dM < MOON_SOI || sR.mag() < R_ATMOS * 2) ? 0.04 : 0.2;
           let n = rk4Step(sR, sV, sT, step);
           sR = n.r; sV = n.v; sT += step;
           
-          if (sR.mag() < R_PLANET || dM < MOON_RADIUS) break;
+          if (sR.mag() < R_PLANET || dM < MOON_RADIUS) {
+            traj.push(sR.copy());
+            break;
+          }
         }
       }
 
@@ -173,14 +153,25 @@
       push();
       translate(width/2, height/2); scale(zoom); translate(-camPos.x, -camPos.y);
       
+      // Moon Orbital Path
+      stroke(255, 255, 255, 15); noFill(); strokeWeight(2/zoom);
+      circle(0, 0, MOON_ORBIT_R * 2);
+
+      // Earth & Atmosphere
       noStroke(); fill(30, 80, 200, 30); circle(0,0, R_ATMOS*2);
       fill(255); circle(0,0, R_PLANET*2);
-      let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-      fill(180); circle(mP.x, mP.y, MOON_RADIUS*2);
 
-      noFill(); stroke(255, 60, 120, 180); strokeWeight(1.5/zoom);
+      // Moon & SOI
+      let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
+      stroke(100, 200, 255, 40); noFill(); strokeWeight(1.5/zoom);
+      circle(mP.x, mP.y, MOON_SOI * 2);
+      noStroke(); fill(180); circle(mP.x, mP.y, MOON_RADIUS*2);
+
+      // Ship Trajectory
+      noFill(); stroke(255, 60, 120, 150); strokeWeight(1.5/zoom);
       beginShape(); traj.forEach(p => vertex(p.x, p.y)); endShape();
 
+      // Atmospheric Reentry Trail
       reentryTrail.forEach(t => {
         t.age -= 2;
         if (t.age > 0) {
@@ -191,6 +182,7 @@
         }
       });
 
+      // Ship & Fragments
       if (!isCrashed) {
         let isHot = r.mag() < R_ATMOS && v.mag() > 18;
         fill(isHot ? color(255, 140, 0) : color(255, 0, 0));
@@ -201,6 +193,7 @@
         });
       }
 
+      // Camera Tracking
       let target = (p5.Vector.dist(r, mP) < MOON_SOI) ? mP : r;
       camPos.x = lerp(camPos.x, target.x, 0.1); camPos.y = lerp(camPos.y, target.y, 0.1);
       pop();
