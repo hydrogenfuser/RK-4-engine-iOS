@@ -2,11 +2,8 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <meta name="apple-mobile-web-app-capable" content="yes">
-  <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-  <meta name="apple-mobile-web-app-title" content="Orbit Sim Pro">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
-  <title>Orbital Simulator - Deep Space</title>
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Orbital Sim - Moon Relative Edition</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
   <style>
     body { margin: 0; padding: 0; overflow: hidden; background-color: #030308; touch-action: none; }
@@ -23,18 +20,15 @@
 
     const MOON_MU = 85000.0;       
     const MOON_RADIUS = 15.0;
-    const MOON_ORBIT_R = 2700.0;   // Doubled Distance
-    const MOON_ORBIT_SPEED = 0.006; // Adjusted for distance
-    const MOON_SOI = 390.0;        // 1.5x Bigger
+    const MOON_ORBIT_R = 2700.0;   
+    const MOON_ORBIT_SPEED = 0.006; 
+    const MOON_SOI = 390.0;        
 
     let r, v, timeSim = 0, camPos, zoom = 0.2;
-    let warpLevels = [0, 1, 10, 50, 200, 500], warpIndex = 1;
+    let warpLevels = [0, 1, 10, 50, 100, 500], warpIndex = 1;
     let fragments = [], reentryTrail = [];
-    let ap = 0, pe = 0;
-    let prevTouchDist = 0;
-    
     let isCrashed = false;
-    let impactAlpha = 0; 
+    let traj = [];
 
     function setup() {
       createCanvas(windowWidth, windowHeight);
@@ -43,45 +37,33 @@
       camPos = createVector(0, 0);
     }
 
-    // --- PHYSICS ENGINE ---
+    // --- ACCELERATION CALC ---
     function getAcc(pos, vel, t) {
       let acc = createVector(0, 0);
       let rMagSq = pos.magSq();
-      let rMag = sqrt(rMagSq);
       
       // Earth Gravity
-      if (rMag < R_PLANET) {
-        let earthF = -G_MU / (R_PLANET * R_PLANET * R_PLANET);
-        acc.add(p5.Vector.mult(pos, earthF));
-      } else {
-        let earthF = -G_MU / (rMagSq * rMag);
-        acc.add(p5.Vector.mult(pos, earthF));
-      }
+      let rMag = sqrt(rMagSq);
+      if (rMag < R_PLANET) acc.add(p5.Vector.mult(pos, -G_MU / (R_PLANET**3)));
+      else acc.add(p5.Vector.mult(pos, -G_MU / (rMagSq * rMag)));
 
       // Drag
       if (rMag < R_ATMOS && rMag > R_PLANET) {
-        let h = rMag - R_PLANET;
-        let rho = exp(-h / 7.5) * ATMOS_DENSITY;
-        let dragF = -0.5 * rho * vel.mag(); 
-        acc.add(p5.Vector.mult(vel, dragF));
+        let rho = exp(-(rMag - R_PLANET) / 7.5) * ATMOS_DENSITY;
+        acc.add(p5.Vector.mult(vel, -0.5 * rho * vel.mag()));
       }
 
       // Moon Gravity
       let mPos = createVector(cos(t * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(t * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
       let rToM = p5.Vector.sub(mPos, pos);
-      let distM = rToM.mag();
-      
-      if (distM < MOON_RADIUS) {
-        let moonF = MOON_MU / (MOON_RADIUS * MOON_RADIUS * MOON_RADIUS);
-        acc.add(p5.Vector.mult(rToM, moonF));
-      } else {
-        let moonF = MOON_MU / (distM * distM * distM);
-        acc.add(p5.Vector.mult(rToM, moonF));
-      }
+      let dM = rToM.mag();
+      if (dM < MOON_RADIUS) acc.add(p5.Vector.mult(rToM, MOON_MU / (MOON_RADIUS**3)));
+      else acc.add(p5.Vector.mult(rToM, MOON_MU / (dM**3)));
 
       return acc;
     }
 
+    // --- RK4 STEP ---
     function rk4Step(pos, vel, t, dt) {
       let k1v = getAcc(pos, vel, t), k1r = vel.copy();
       let k2v = getAcc(p5.Vector.add(pos, p5.Vector.mult(k1r, dt/2)), p5.Vector.add(vel, p5.Vector.mult(k1v, dt/2)), t + dt/2);
@@ -98,104 +80,72 @@
     }
 
     function createDebris(pos, vel) {
-      impactAlpha = 255; 
       isCrashed = true;
-      // High-velocity fragmentation
-      for(let i = 0; i < 350; i++) {
-        let burstVel = p5.Vector.random2D().mult(random(5, 45)); 
+      for(let i = 0; i < 200; i++) {
         fragments.push({
           r: pos.copy(),
-          v: p5.Vector.add(vel.copy().mult(0.4), burstVel),
-          life: random(200, 400)
+          v: p5.Vector.add(vel.copy().mult(0.3), p5.Vector.random2D().mult(random(5, 50))),
+          life: random(100, 300)
         });
       }
     }
 
     function draw() {
-      background(4, 4, 10);
+      background(3, 3, 8);
       let currentWarp = warpLevels[warpIndex];
       let dt = 0.01; 
-      let subSteps = 4; 
+      let subSteps = currentWarp > 10 ? 2 : 4; 
 
-      // --- LIVE PHYSICS ---
+      // --- PHYSICS ---
       for (let s = 0; s < currentWarp * subSteps; s++) {
         let stepSize = dt / subSteps;
-        
         if (!isCrashed) {
-          let thrustPower = 35.0; 
-          if (keyIsDown(87)) v.add(v.copy().normalize().mult(thrustPower * stepSize));
-          if (keyIsDown(83)) v.add(v.copy().normalize().mult(-thrustPower * stepSize));
-          if (keyIsDown(65)) v.add(createVector(-v.y, v.x).normalize().mult(thrustPower * stepSize));
-          if (keyIsDown(68)) v.add(createVector(v.y, -v.x).normalize().mult(thrustPower * stepSize));
-
+          if (keyIsDown(87)) v.add(v.copy().normalize().mult(30 * stepSize)); // W
+          if (keyIsDown(83)) v.add(v.copy().normalize().mult(-30 * stepSize)); // S
+          
           let next = rk4Step(r, v, timeSim, stepSize);
           r = next.r; v = next.v; timeSim += stepSize;
 
           let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-          if (r.mag() < R_PLANET || p5.Vector.dist(r, mP) < MOON_RADIUS) {
-            createDebris(r, v);
-          }
-          if (r.mag() < R_ATMOS && s % 5 === 0) reentryTrail.push({pos: r.copy(), age: 200, heat: v.mag()});
+          if (r.mag() < R_PLANET || p5.Vector.dist(r, mP) < MOON_RADIUS) createDebris(r, v);
+          if (r.mag() < R_ATMOS && frameCount % 10 == 0) reentryTrail.push({pos: r.copy(), age: 150});
         }
 
-        // Debris Physics with High Elasticity Ricochet
+        // Optimized Debris
         for (let i = fragments.length - 1; i >= 0; i--) {
           let f = fragments[i];
           let acc = getAcc(f.r, f.v, timeSim);
           f.v.add(p5.Vector.mult(acc, stepSize));
           f.r.add(p5.Vector.mult(f.v, stepSize));
-          f.life -= 0.5 * (currentWarp > 10 ? 10 : currentWarp); 
+          f.life -= 1;
 
-          // Earth Bounce
+          // Bounce Logic
           if (f.r.mag() < R_PLANET) {
             let n = f.r.copy().normalize();
-            f.r = n.copy().mult(R_PLANET + 0.5); 
-            let dot = f.v.dot(n);
-            if (dot < 0) f.v.sub(p5.Vector.mult(n, 2 * dot)).mult(random(0.7, 0.9)); // High bounciness
-          }
-
-          // Moon Bounce
-          let fmP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-          if (p5.Vector.dist(f.r, fmP) < MOON_RADIUS) {
-            let n = p5.Vector.sub(f.r, fmP).normalize();
-            f.r = p5.Vector.add(fmP, p5.Vector.mult(n, MOON_RADIUS + 0.5));
-            let mVel = createVector(-sin(timeSim*MOON_ORBIT_SPEED)*MOON_ORBIT_SPEED*MOON_ORBIT_R, cos(timeSim*MOON_ORBIT_SPEED)*MOON_ORBIT_SPEED*MOON_ORBIT_R);
-            let relV = p5.Vector.sub(f.v, mVel);
-            let relDot = relV.dot(n);
-            if (relDot < 0) {
-              relV.sub(p5.Vector.mult(n, 2 * relDot)).mult(random(0.7, 0.9));
-              f.v = p5.Vector.add(relV, mVel);
-            }
+            f.v = f.v.reflect(n).mult(0.8);
+            f.r = n.mult(R_PLANET + 1);
           }
           if (f.life <= 0) fragments.splice(i, 1);
         }
       }
-      if (reentryTrail.length > 250) reentryTrail.shift();
-      if (impactAlpha > 0) impactAlpha -= 1.5;
+      if (reentryTrail.length > 100) reentryTrail.shift();
 
-      // --- PREDICTION (SPLIT SOI RENDERING) ---
-      let traj = [];
-      if (!isCrashed) {
+      // --- OPTIMIZED PREDICTION ---
+      if (!isCrashed && frameCount % 2 === 0) { // Only update prediction every 2 frames to save CPU
+        traj = [];
         let sR = r.copy(), sV = v.copy(), sT = timeSim;
-        let lastTrajPos = sR.copy();
-        
-        for(let i=0; i<8000; i++) { // Longer prediction for distant moon
+        for(let i=0; i<1500; i++) {
           let mP = createVector(cos(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
           let dM = p5.Vector.dist(sR, mP);
-          let currentInMoonSOI = dM < MOON_SOI;
+          let inSOI = dM < MOON_SOI;
           
-          let step = (currentInMoonSOI || sR.mag() < R_ATMOS * 2) ? 0.08 : 0.6;
+          // Adaptive stepping: faster in deep space
+          let step = inSOI ? 0.05 : 0.4; 
           let n = rk4Step(sR, sV, sT, step);
           sR = n.r; sV = n.v; sT += step;
           
-          if (sR.mag() < R_PLANET || dM < MOON_RADIUS) {
-            traj.push({ pos: sR.copy(), inMoonSOI: currentInMoonSOI });
-            break; 
-          }
-          if (p5.Vector.dist(sR, lastTrajPos) > 4.0 / zoom) {
-            traj.push({ pos: sR.copy(), inMoonSOI: currentInMoonSOI });
-            lastTrajPos = sR.copy();
-          }
+          traj.push({ pos: sR.copy(), relMoon: inSOI, moonPos: mP.copy() });
+          if (sR.mag() < R_PLANET || dM < MOON_RADIUS) break;
         }
       }
 
@@ -203,74 +153,66 @@
       push();
       translate(width/2, height/2); scale(zoom); translate(-camPos.x, -camPos.y);
       
-      // Moon Orbital Path
-      stroke(255, 255, 255, 10); noFill(); strokeWeight(1/zoom);
-      circle(0, 0, MOON_ORBIT_R * 2);
+      // Orbit paths
+      stroke(255, 10); noFill(); circle(0,0, MOON_ORBIT_R*2);
 
-      // Earth
-      noStroke(); fill(30, 80, 200, 20); circle(0,0, R_ATMOS*2);
-      fill(255); circle(0,0, R_PLANET*2);
-
-      // Moon & SOI
+      // Celestial Bodies
+      fill(50, 100, 255); noStroke(); circle(0,0, R_PLANET*2);
       let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-      stroke(100, 200, 255, 40); fill(100, 200, 255, 5); strokeWeight(2/zoom);
-      circle(mP.x, mP.y, MOON_SOI * 2);
-      noStroke(); fill(200); circle(mP.x, mP.y, MOON_RADIUS*2);
+      fill(100, 200, 255, 30); circle(mP.x, mP.y, MOON_SOI*2);
+      fill(180); circle(mP.x, mP.y, MOON_RADIUS*2);
 
-      // Split Trajectory Rendering
-      if (!isCrashed && traj.length > 1) {
-        noFill(); strokeWeight(2/zoom);
-        for(let i = 0; i < traj.length - 1; i++) {
-          let p1 = traj[i], p2 = traj[i+1];
-          if (p1.inMoonSOI) stroke(0, 180, 255, 200); // Sharp Blue
-          else stroke(255, 60, 120, 150); // Pink
+      // Trajectory (MOON RELATIVE LOGIC)
+      noFill(); strokeWeight(2/zoom);
+      for(let i=0; i < traj.length - 1; i++) {
+        let p1 = traj[i], p2 = traj[i+1];
+        if (p1.relMoon) {
+          stroke(0, 150, 255);
+          // To make it look "relative" to the moon as it moves:
+          line(p1.pos.x, p1.pos.y, p2.pos.x, p2.pos.y);
+        } else {
+          stroke(255, 50, 150, 150);
           line(p1.pos.x, p1.pos.y, p2.pos.x, p2.pos.y);
         }
       }
 
-      // Reentry Trail
-      reentryTrail.forEach(t => {
-        t.age -= 2;
-        if (t.age > 0) {
-          stroke(255, 120, 0, t.age); strokeWeight(3/zoom); point(t.pos.x, t.pos.y);
-        }
-      });
+      // Debris
+      fill(255, 200, 100);
+      fragments.forEach(f => rect(f.r.x, f.r.y, 1/zoom, 1/zoom));
 
-      // Shrapnel
-      noStroke(); rectMode(CENTER);
-      fragments.forEach(f => {
-        fill(255, 240, 150, f.life); 
-        rect(f.r.x, f.r.y, 1.2/zoom, 1.2/zoom);
-      });
-
-      // Craft
+      // Ship
       if (!isCrashed) {
-        fill(255, 0, 0); noStroke(); circle(r.x, r.y, 7/zoom);
+        fill(255, 0, 0); circle(r.x, r.y, 6/zoom);
+        let target = (p5.Vector.dist(r, mP) < MOON_SOI) ? mP : r;
+        camPos.x = lerp(camPos.x, target.x, 0.1); camPos.y = lerp(camPos.y, target.y, 0.1);
       }
-
-      // Dynamic Camera
-      let targetPos = isCrashed && fragments.length > 0 ? fragments[0].r : r; 
-      let target = (!isCrashed && p5.Vector.dist(r, mP) < MOON_SOI) ? mP : targetPos;
-      camPos.x = lerp(camPos.x, target.x, 0.05); camPos.y = lerp(camPos.y, target.y, 0.05);
       pop();
 
-      // --- UI ---
-      fill(255); textSize(16); textAlign(LEFT, TOP); noStroke();
-      if (!isCrashed) {
-        text(`STATUS: NOMINAL\nALT: ${(r.mag()-R_PLANET).toFixed(1)}m\nVEL: ${v.mag().toFixed(2)}m/s\nWARP: ${currentWarp}x`, 30, 60);
-      } else {
-        fill(255, 80, 80); textSize(24);
-        text("VEHICLE DESTROYED - RESTART (R)", 30, 60);
-      }
+      // UI
+      fill(255); noStroke(); textSize(16);
+      text(`WARP: ${currentWarp}x\nZOOM: ${zoom.toFixed(2)}x\n${isCrashed ? "SIGNAL LOST" : "SYSTEMS NOMINAL"}`, 20, 40);
     }
 
-    function keyPressed() { 
-      if (keyCode === 190 && warpIndex < warpLevels.length - 1) warpIndex++; 
-      if (keyCode === 188 && warpIndex > 0) warpIndex--; 
-      if (key === 'r' || key === 'R') location.reload(); 
+    // --- INTERACTION ---
+    function mouseWheel(e) { zoom = constrain(zoom * (1 - e.delta * 0.001), 0.005, 5); return false; }
+    
+    // Pinch to zoom for mobile
+    let prevDist = 0;
+    function touchMoved() {
+      if (touches.length === 2) {
+        let d = dist(touches[0].x, touches[0].y, touches[1].x, touches[1].y);
+        if (prevDist > 0) zoom = constrain(zoom * (d / prevDist), 0.005, 5);
+        prevDist = d;
+      }
+      return false;
     }
-    function mouseWheel(e) { zoom = constrain(zoom * (1 - e.delta * 0.001), 0.01, 5); return false; }
-    function windowResized() { resizeCanvas(windowWidth, windowHeight); }
+    function touchEnd() { prevDist = 0; }
+
+    function keyPressed() {
+      if (keyCode === 190 && warpIndex < warpLevels.length - 1) warpIndex++;
+      if (keyCode === 188 && warpIndex > 0) warpIndex--;
+      if (key === 'r') location.reload();
+    }
   </script>
 </body>
 </html>
