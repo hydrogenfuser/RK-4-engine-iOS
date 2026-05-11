@@ -34,8 +34,7 @@
     let prevTouchDist = 0;
     
     // Impact trackers
-    let wasInsideEarth = false;
-    let wasInsideMoon = false;
+    let isCrashed = false;
     let impactAlpha = 0; 
 
     function setup() {
@@ -51,7 +50,7 @@
       let rMagSq = pos.magSq();
       let rMag = sqrt(rMagSq);
       
-      // 1. Earth Volumetric Gravity
+      // 1. Earth Gravity
       if (rMag < R_PLANET) {
         let earthF = -G_MU / (R_PLANET * R_PLANET * R_PLANET);
         acc.add(p5.Vector.mult(pos, earthF));
@@ -68,7 +67,7 @@
         acc.add(p5.Vector.mult(vel, dragF));
       }
 
-      // 3. Moon Volumetric Gravity
+      // 3. Moon Gravity
       let mPos = createVector(cos(t * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(t * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
       let rToM = p5.Vector.sub(mPos, pos);
       let distM = rToM.mag();
@@ -84,7 +83,7 @@
       return acc;
     }
 
-    // --- 4TH ORDER RUNGE-KUTTA INTEGRATOR (For Ship) ---
+    // --- 4TH ORDER RUNGE-KUTTA INTEGRATOR ---
     function rk4Step(pos, vel, t, dt) {
       let k1v = getAcc(pos, vel, t), k1r = vel.copy();
       let k2v = getAcc(p5.Vector.add(pos, p5.Vector.mult(k1r, dt/2)), p5.Vector.add(vel, p5.Vector.mult(k1v, dt/2)), t + dt/2);
@@ -103,12 +102,13 @@
     // --- RICOCHET DEBRIS GENERATOR ---
     function createDebris(pos, vel) {
       impactAlpha = 255; 
-      // Reduced particle count slightly for optimization
-      for(let i = 0; i < 20; i++) {
+      isCrashed = true;
+      // Massive explosion of hundreds of bouncing particles
+      for(let i = 0; i < 250; i++) {
         fragments.push({
           r: pos.copy(),
-          v: p5.Vector.add(vel.copy().mult(0.5), p5.Vector.random2D().mult(random(2, 12))),
-          life: random(150, 255)
+          v: p5.Vector.add(vel.copy().mult(0.3), p5.Vector.random2D().mult(random(2, 25))),
+          life: random(150, 300) // Varied lifespans
         });
       }
     }
@@ -123,34 +123,33 @@
       for (let s = 0; s < currentWarp * subSteps; s++) {
         let stepSize = dt / subSteps;
         
-        let thrustPower = 30.0; 
-        if (keyIsDown(87)) v.add(v.copy().normalize().mult(thrustPower * stepSize));
-        if (keyIsDown(83)) v.add(v.copy().normalize().mult(-thrustPower * stepSize));
-        if (keyIsDown(65)) v.add(r.copy().normalize().mult(-thrustPower * stepSize));
-        if (keyIsDown(68)) v.add(r.copy().normalize().mult(thrustPower * stepSize));
+        if (!isCrashed) {
+          let thrustPower = 30.0; 
+          if (keyIsDown(87)) v.add(v.copy().normalize().mult(thrustPower * stepSize));
+          if (keyIsDown(83)) v.add(v.copy().normalize().mult(-thrustPower * stepSize));
+          if (keyIsDown(65)) v.add(r.copy().normalize().mult(-thrustPower * stepSize));
+          if (keyIsDown(68)) v.add(r.copy().normalize().mult(thrustPower * stepSize));
 
-        let next = rk4Step(r, v, timeSim, stepSize);
-        r = next.r; v = next.v; timeSim += stepSize;
+          let next = rk4Step(r, v, timeSim, stepSize);
+          r = next.r; v = next.v; timeSim += stepSize;
 
-        let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-        let insideEarth = r.mag() < R_PLANET;
-        let insideMoon = p5.Vector.dist(r, mP) < MOON_RADIUS;
+          let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
+          
+          // Terminal Impact Detection
+          if (r.mag() < R_PLANET || p5.Vector.dist(r, mP) < MOON_RADIUS) {
+            createDebris(r, v);
+          }
 
-        if (insideEarth && !wasInsideEarth) { createDebris(r, v); wasInsideEarth = true; } 
-        else if (!insideEarth) { wasInsideEarth = false; }
+          if (r.mag() < R_ATMOS && s % 5 === 0) reentryTrail.push({pos: r.copy(), age: 200, heat: v.mag()});
+        }
 
-        if (insideMoon && !wasInsideMoon) { createDebris(r, v); wasInsideMoon = true; } 
-        else if (!insideMoon) { wasInsideMoon = false; }
-
-        if (r.mag() < R_ATMOS && s % 5 === 0) reentryTrail.push({pos: r.copy(), age: 200, heat: v.mag()});
-        
-        // OPTIMIZATION: Debris uses simple Euler Integration instead of heavy RK4
+        // Debris Physics (Euler Integration with bouncing)
         for (let i = fragments.length - 1; i >= 0; i--) {
           let f = fragments[i];
           let acc = getAcc(f.r, f.v, timeSim);
           f.v.add(p5.Vector.mult(acc, stepSize));
           f.r.add(p5.Vector.mult(f.v, stepSize));
-          f.life -= 0.5 * currentWarp;
+          f.life -= 0.6 * currentWarp; 
 
           // Earth Ricochet
           let fMag = f.r.mag();
@@ -158,7 +157,7 @@
             let n = f.r.copy().normalize();
             f.r = n.copy().mult(R_PLANET + 0.01); 
             let dot = f.v.dot(n);
-            if (dot < 0) f.v.sub(p5.Vector.mult(n, 2 * dot)).mult(random(0.4, 0.7)); 
+            if (dot < 0) f.v.sub(p5.Vector.mult(n, 2 * dot)).mult(random(0.4, 0.8)); 
           }
 
           // Moon Ricochet
@@ -170,7 +169,7 @@
             let relV = p5.Vector.sub(f.v, mVel);
             let relDot = relV.dot(n);
             if (relDot < 0) {
-              relV.sub(p5.Vector.mult(n, 2 * relDot)).mult(random(0.4, 0.7));
+              relV.sub(p5.Vector.mult(n, 2 * relDot)).mult(random(0.4, 0.8));
               f.v = p5.Vector.add(relV, mVel);
             }
           }
@@ -178,30 +177,45 @@
           if (f.life <= 0) fragments.splice(i, 1);
         }
       }
-      if (reentryTrail.length > 300) reentryTrail.shift(); // Optimized array length
+      if (reentryTrail.length > 300) reentryTrail.shift();
       if (impactAlpha > 0) impactAlpha -= 2;
 
-      // --- PREDICTION (OPTIMIZED VERTEX DECIMATION) ---
-      let sR = r.copy(), sV = v.copy(), sT = timeSim, traj = [];
+      // --- PREDICTION (OPTIMIZED & SOI COLOR SHIFTING) ---
+      let traj = [];
       ap = 0; pe = Infinity;
-      let lastTrajPos = sR.copy();
-      traj.push(sR.copy());
 
-      for(let i=0; i<4000; i++) {
-        let distMag = sR.mag();
-        if (distMag > ap) ap = distMag; if (distMag < pe) pe = distMag;
+      if (!isCrashed) {
+        let sR = r.copy(), sV = v.copy(), sT = timeSim;
+        let lastTrajPos = sR.copy();
         
-        let mP = createVector(cos(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-        let dM = p5.Vector.dist(sR, mP);
+        // Check initial SOI state
+        let initMp = createVector(cos(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
+        let inMoonSOI = p5.Vector.dist(sR, initMp) < MOON_SOI;
         
-        let step = (dM < MOON_SOI || distMag < R_ATMOS * 2) ? 0.05 : 0.3;
-        let n = rk4Step(sR, sV, sT, step);
-        sR = n.r; sV = n.v; sT += step;
-        
-        // ONLY save vertex if it moved enough visually (Massive drawing optimization)
-        if (p5.Vector.dist(sR, lastTrajPos) > 2.0 / zoom) {
-          traj.push(sR.copy());
-          lastTrajPos = sR.copy();
+        traj.push({ pos: sR.copy(), inMoonSOI: inMoonSOI });
+
+        for(let i=0; i<4000; i++) {
+          let distMag = sR.mag();
+          if (distMag > ap) ap = distMag; if (distMag < pe) pe = distMag;
+          
+          let mP = createVector(cos(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
+          let dM = p5.Vector.dist(sR, mP);
+          let currentInMoonSOI = dM < MOON_SOI;
+          
+          let step = (currentInMoonSOI || distMag < R_ATMOS * 2) ? 0.05 : 0.3;
+          let n = rk4Step(sR, sV, sT, step);
+          sR = n.r; sV = n.v; sT += step;
+          
+          // Terminate prediction on impact
+          if (sR.mag() < R_PLANET || dM < MOON_RADIUS) {
+            traj.push({ pos: sR.copy(), inMoonSOI: currentInMoonSOI });
+            break; 
+          }
+
+          if (p5.Vector.dist(sR, lastTrajPos) > 2.0 / zoom) {
+            traj.push({ pos: sR.copy(), inMoonSOI: currentInMoonSOI });
+            lastTrajPos = sR.copy();
+          }
         }
       }
 
@@ -209,23 +223,41 @@
       push();
       translate(width/2, height/2); scale(zoom); translate(-camPos.x, -camPos.y);
       
-      // Moon Orbital Path (Enhanced visibility)
-      stroke(200, 220, 255, 30); noFill(); strokeWeight(2/zoom);
+      // Moon Orbital Path (Bright blue orbit line)
+      stroke(100, 150, 255, 60); noFill(); strokeWeight(2/zoom);
       circle(0, 0, MOON_ORBIT_R * 2);
 
       // Earth & Atmosphere
       noStroke(); fill(30, 80, 200, 30); circle(0,0, R_ATMOS*2);
       fill(255); circle(0,0, R_PLANET*2);
 
-      // Moon & Enhanced SOI Boundary
+      // Moon & SOI Boundary
       let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-      stroke(100, 200, 255, 60); noFill(); strokeWeight(2/zoom); // Brighter, thicker SOI
+      stroke(100, 200, 255, 80); noFill(); strokeWeight(2/zoom);
       circle(mP.x, mP.y, MOON_SOI * 2);
       noStroke(); fill(180); circle(mP.x, mP.y, MOON_RADIUS*2);
 
-      // Ship Trajectory
-      noFill(); stroke(255, 60, 120, 150); strokeWeight(1.5/zoom);
-      beginShape(); traj.forEach(p => vertex(p.x, p.y)); endShape();
+      // Ship Trajectory (Changes color based on SOI)
+      if (!isCrashed && traj.length > 0) {
+        noFill(); strokeWeight(1.5/zoom);
+        let currentSOIState = traj[0].inMoonSOI;
+        
+        beginShape();
+        if (currentSOIState) stroke(100, 200, 255, 180); // Blue in Moon SOI
+        else stroke(255, 60, 120, 150); // Pink in Earth SOI
+        
+        traj.forEach(p => {
+          if (p.inMoonSOI !== currentSOIState) {
+            endShape();
+            beginShape();
+            if (p.inMoonSOI) stroke(100, 200, 255, 180); 
+            else stroke(255, 60, 120, 150); 
+            currentSOIState = p.inMoonSOI;
+          }
+          vertex(p.pos.x, p.pos.y);
+        });
+        endShape();
+      }
 
       // Atmospheric Reentry Trail
       reentryTrail.forEach(t => {
@@ -238,31 +270,36 @@
         }
       });
 
-      // Smaller Ricocheting Pixel Debris
+      // Hundreds of Ricocheting Debris Sparks
       noStroke(); rectMode(CENTER);
       fragments.forEach(f => {
-        fill(255, 200, 100, f.life); 
-        rect(f.r.x, f.r.y, 0.6/zoom, 0.6/zoom); // Half size particles
+        fill(255, 200, 50, f.life); 
+        rect(f.r.x, f.r.y, 1.0/zoom, 1.0/zoom);
       });
 
-      // The Ghost Ship
-      let isHot = r.mag() < R_ATMOS && v.mag() > 18;
-      fill(isHot ? color(255, 140, 0) : color(255, 0, 0));
-      noStroke(); circle(r.x, r.y, 6/zoom);
+      // Main Ship
+      if (!isCrashed) {
+        let isHot = r.mag() < R_ATMOS && v.mag() > 18;
+        fill(isHot ? color(255, 140, 0) : color(255, 0, 0));
+        noStroke(); circle(r.x, r.y, 6/zoom);
+      }
 
       // Camera Tracking
-      let target = (p5.Vector.dist(r, mP) < MOON_SOI) ? mP : r;
+      let targetPos = isCrashed ? createVector(0,0) : r; 
+      let target = (!isCrashed && p5.Vector.dist(r, mP) < MOON_SOI) ? mP : targetPos;
+      if (isCrashed && fragments.length > 0) target = fragments[0].r; // Follow a piece of debris
+      
       camPos.x = lerp(camPos.x, target.x, 0.1); camPos.y = lerp(camPos.y, target.y, 0.1);
       pop();
 
       // --- UI ---
       fill(255); textSize(16); textAlign(LEFT, TOP); noStroke();
-      text(`ALTITUDE: ${(r.mag()-R_PLANET).toFixed(2)} m\nVELOCITY: ${v.mag().toFixed(3)} m/s\nAPOAPSIS: ${(ap-R_PLANET).toFixed(2)} m\nPERIAPSIS: ${(pe-R_PLANET).toFixed(2)} m\nTIME WARP: ${currentWarp}x`, 30, 60);
-      
-      if (impactAlpha > 0) { 
-        fill(255, 100, 50, impactAlpha); 
-        textSize(28); 
-        text("SURFACE IMPACT DETECTED", width/2 - 170, height - 100); 
+      if (!isCrashed) {
+        text(`ALTITUDE: ${(r.mag()-R_PLANET).toFixed(2)} m\nVELOCITY: ${v.mag().toFixed(3)} m/s\nAPOAPSIS: ${(ap-R_PLANET).toFixed(2)} m\nPERIAPSIS: ${(pe-R_PLANET).toFixed(2)} m\nTIME WARP: ${currentWarp}x`, 30, 60);
+      } else {
+        text(`TIME WARP: ${currentWarp}x`, 30, 60);
+        fill(255, 50, 50); textSize(28); 
+        text("VEHICLE DESTROYED - PRESS 'R' TO RESTART", width/2 - 250, height - 100); 
       }
     }
 
