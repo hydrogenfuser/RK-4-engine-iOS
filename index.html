@@ -3,42 +3,39 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Orbital Simulator - Restoration Edition</title>
+  <title>Orbital Simulator - THE FIX</title>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/p5.js/1.9.0/p5.min.js"></script>
   <style>
-    body { margin: 0; padding: 0; overflow: hidden; background-color: #030308; touch-action: none; }
+    body { margin: 0; padding: 0; overflow: hidden; background-color: #020205; touch-action: none; }
     canvas { display: block; }
   </style>
 </head>
 <body>
   <script>
-    // --- SIMULATION CONSTANTS ---
+    // --- SETTINGS ---
     const G_MU = 800000.0;         
-    const R_PLANET = 50.0;         
-    const R_ATMOS = 75.0;          
-    const ATMOS_DENSITY = 0.015; 
-
-    const MOON_MU = 85000.0;       
-    const MOON_RADIUS = 15.0;
+    const R_PLANET = 55.0;         
+    const R_ATMOS = 85.0;          
+    const MOON_MU = 95000.0;       
+    const MOON_RADIUS = 18.0;
     const MOON_ORBIT_R = 2700.0;   
     const MOON_ORBIT_SPEED = 0.006; 
-    const MOON_SOI = 420.0;        
+    const MOON_SOI = 450.0;        
 
-    let r, v, timeSim = 0, camPos, zoom = 0.2;
-    let warpLevels = [0, 1, 10, 50, 100, 500], warpIndex = 1;
+    let r, v, timeSim = 0, camPos, zoom = 0.15;
+    let warpLevels = [0, 1, 5, 20, 100, 500], warpIndex = 1;
     let fragments = [], reentryTrail = [];
     let isCrashed = false;
     let traj = [];
 
     function setup() {
       createCanvas(windowWidth, windowHeight);
-      r = createVector(0, -180);
-      v = createVector(sqrt(G_MU / r.mag()) + 2.2, 0); 
+      r = createVector(0, -200);
+      v = createVector(sqrt(G_MU / r.mag()) + 2.5, 0); 
       camPos = createVector(0, 0);
     }
 
-    // --- PHYSICS ENGINE ---
-    function getAcc(pos, vel, t) {
+    function getAcc(pos, vel, t, isPrediction = false) {
       let acc = createVector(0, 0);
       let rMagSq = pos.magSq();
       let rMag = sqrt(rMagSq);
@@ -47,9 +44,9 @@
       if (rMag < R_PLANET) acc.add(p5.Vector.mult(pos, -G_MU / (R_PLANET**3)));
       else acc.add(p5.Vector.mult(pos, -G_MU / (rMagSq * rMag)));
 
-      // Drag
+      // Atmospheric Drag (Earth only)
       if (rMag < R_ATMOS && rMag > R_PLANET) {
-        let rho = exp(-(rMag - R_PLANET) / 7.5) * ATMOS_DENSITY;
+        let rho = exp(-(rMag - R_PLANET) / 8.0) * 0.02;
         acc.add(p5.Vector.mult(vel, -0.5 * rho * vel.mag()));
       }
 
@@ -71,95 +68,93 @@
       let k3r = p5.Vector.add(vel, p5.Vector.mult(k2v, dt/2));
       let k4v = getAcc(p5.Vector.add(pos, p5.Vector.mult(k3r, dt)), p5.Vector.add(vel, p5.Vector.mult(k3v, dt)), t + dt);
       let k4r = p5.Vector.add(vel, p5.Vector.mult(k3v, dt));
-
       return {
         r: p5.Vector.add(pos, p5.Vector.mult(p5.Vector.add(k1r, p5.Vector.mult(k2r, 2)).add(p5.Vector.mult(k3r, 2)).add(k4r), dt/6)),
         v: p5.Vector.add(vel, p5.Vector.mult(p5.Vector.add(k1v, p5.Vector.mult(k2v, 2)).add(p5.Vector.mult(k3v, 2)).add(k4v), dt/6))
       };
     }
 
-    function createDebris(pos, vel) {
+    function explode(pos, vel) {
       isCrashed = true;
-      for(let i = 0; i < 350; i++) {
-        let burst = p5.Vector.random2D().mult(random(5, 55));
+      for(let i = 0; i < 400; i++) {
+        let angle = random(TWO_PI);
+        let force = random(10, 65);
         fragments.push({
           r: pos.copy(),
-          v: p5.Vector.add(vel.copy().mult(0.4), burst),
-          life: random(200, 400)
+          v: p5.Vector.add(vel.copy().mult(0.3), p5.Vector.fromAngle(angle).mult(force)),
+          life: random(250, 500),
+          col: color(random(200,255), random(150,255), 50)
         });
       }
     }
 
     function draw() {
-      background(4, 4, 12);
+      background(2, 2, 6);
       let currentWarp = warpLevels[warpIndex];
-      let dt = 0.01; 
-      let subSteps = 4; 
+      let dt = 0.015; 
+      let subSteps = currentWarp > 20 ? 2 : 5; 
 
-      // --- SIMULATION LOOP ---
+      // --- SIMULATION ---
       for (let s = 0; s < currentWarp * subSteps; s++) {
         let stepSize = dt / subSteps;
         if (!isCrashed) {
-          // Controls
-          let thrust = 35 * stepSize;
-          if (keyIsDown(87)) v.add(v.copy().normalize().mult(thrust)); // W
-          if (keyIsDown(83)) v.add(v.copy().normalize().mult(-thrust)); // S
-          if (keyIsDown(65)) v.add(createVector(-v.y, v.x).normalize().mult(thrust)); // A
-          if (keyIsDown(68)) v.add(createVector(v.y, -v.x).normalize().mult(thrust)); // D
+          if (keyIsDown(87)) v.add(v.copy().normalize().mult(40 * stepSize)); // W
+          if (keyIsDown(83)) v.add(v.copy().normalize().mult(-40 * stepSize)); // S
+          if (keyIsDown(65)) v.add(createVector(-v.y, v.x).normalize().mult(40 * stepSize)); // A
+          if (keyIsDown(68)) v.add(createVector(v.y, -v.x).normalize().mult(40 * stepSize)); // D
           
           let next = rk4Step(r, v, timeSim, stepSize);
           r = next.r; v = next.v; timeSim += stepSize;
 
           let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-          if (r.mag() < R_PLANET || p5.Vector.dist(r, mP) < MOON_RADIUS) createDebris(r, v);
-          if (r.mag() < R_ATMOS && s % 10 === 0) reentryTrail.push({pos: r.copy(), age: 150});
+          if (r.mag() < R_PLANET || p5.Vector.dist(r, mP) < MOON_RADIUS) explode(r, v);
+          if (r.mag() < R_ATMOS && s % 8 === 0) reentryTrail.push({pos: r.copy(), age: 100});
         }
 
-        // Debris Physics
+        // Shrapnel Physics
         for (let i = fragments.length - 1; i >= 0; i--) {
           let f = fragments[i];
           let acc = getAcc(f.r, f.v, timeSim);
           f.v.add(p5.Vector.mult(acc, stepSize));
           f.r.add(p5.Vector.mult(f.v, stepSize));
-          f.life -= 0.5;
+          f.life -= 0.6;
 
-          // Bounce off Earth
+          // High Energy Bounces
           if (f.r.mag() < R_PLANET) {
             let n = f.r.copy().normalize();
-            f.v = f.v.reflect(n).mult(0.7);
+            f.v = f.v.reflect(n).mult(0.85); 
             f.r = n.mult(R_PLANET + 1);
           }
-          // Bounce off Moon
           let fmP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
           if (p5.Vector.dist(f.r, fmP) < MOON_RADIUS) {
             let n = p5.Vector.sub(f.r, fmP).normalize();
-            let mVel = createVector(-sin(timeSim*MOON_ORBIT_SPEED), cos(timeSim*MOON_ORBIT_SPEED)).mult(MOON_ORBIT_SPEED*MOON_ORBIT_R);
-            let relV = p5.Vector.sub(f.v, mVel);
-            f.v = p5.Vector.add(relV.reflect(n).mult(0.7), mVel);
+            f.v = f.v.reflect(n).mult(0.85);
             f.r = p5.Vector.add(fmP, n.mult(MOON_RADIUS + 1));
           }
           if (f.life <= 0) fragments.splice(i, 1);
         }
       }
-      if (reentryTrail.length > 150) reentryTrail.shift();
+      if (reentryTrail.length > 80) reentryTrail.shift();
 
-      // --- PREDICTION (MOON RELATIVE LOGIC) ---
+      // --- PREDICTION (RELATIVE LOGIC) ---
       if (!isCrashed) {
         traj = [];
         let sR = r.copy(), sV = v.copy(), sT = timeSim;
-        let lastPos = sR.copy();
-        for(let i=0; i<3000; i++) {
+        for(let i=0; i<2500; i++) {
           let mP = createVector(cos(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(sT * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-          let inSOI = p5.Vector.dist(sR, mP) < MOON_SOI;
-          let step = inSOI ? 0.08 : 0.5;
+          let toMoon = p5.Vector.sub(sR, mP);
+          let inSOI = toMoon.mag() < MOON_SOI;
+          
+          let step = inSOI ? 0.1 : 0.6;
           let n = rk4Step(sR, sV, sT, step);
           sR = n.r; sV = n.v; sT += step;
           
-          // Optimization: decimate vertices
-          if (p5.Vector.dist(sR, lastPos) > 5/zoom || inSOI) {
-            traj.push({ pos: sR.copy(), relMoon: inSOI, mP: mP.copy() });
-            lastPos = sR.copy();
-          }
+          // Store relative position if in SOI
+          traj.push({ 
+            pos: sR.copy(), 
+            relPos: inSOI ? toMoon : null, 
+            inSOI: inSOI 
+          });
           if (sR.mag() < R_PLANET || p5.Vector.dist(sR, mP) < MOON_RADIUS) break;
         }
       }
@@ -168,69 +163,51 @@
       push();
       translate(width/2, height/2); scale(zoom); translate(-camPos.x, -camPos.y);
       
-      // Background paths
-      stroke(255, 15); noFill(); circle(0,0, MOON_ORBIT_R*2);
+      // World
+      noFill(); stroke(255, 10); circle(0,0, MOON_ORBIT_R*2);
+      fill(20, 60, 200); noStroke(); circle(0,0, R_PLANET*2);
+      fill(40, 100, 255, 20); circle(0,0, R_ATMOS*2);
 
-      // Earth
-      fill(0, 100, 255); noStroke(); circle(0,0, R_PLANET*2);
-      fill(0, 100, 255, 30); circle(0,0, R_ATMOS*2);
-
-      // Moon & SOI
+      // Moon
       let mP = createVector(cos(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R, sin(timeSim * MOON_ORBIT_SPEED) * MOON_ORBIT_R);
-      stroke(0, 200, 255, 50); fill(0, 200, 255, 5); strokeWeight(2/zoom);
-      circle(mP.x, mP.y, MOON_SOI*2);
-      noStroke(); fill(200); circle(mP.x, mP.y, MOON_RADIUS*2);
+      stroke(0, 255, 255, 40); fill(0, 255, 255, 5); circle(mP.x, mP.y, MOON_SOI*2);
+      noStroke(); fill(150); circle(mP.x, mP.y, MOON_RADIUS*2);
 
-      // Multi-Reference Trajectory
-      noFill(); strokeWeight(2.5/zoom);
-      for(let i=0; i < traj.length - 1; i++) {
-        let p1 = traj[i], p2 = traj[i+1];
-        if (p1.relMoon) stroke(0, 180, 255); // Moon Relative Blue
-        else stroke(255, 50, 150, 180);      // Earth Relative Pink
-        line(p1.pos.x, p1.pos.y, p2.pos.x, p2.pos.y);
-      }
-
-      // Debris
-      noStroke(); fill(255, 220, 100);
-      fragments.forEach(f => rect(f.r.x, f.r.y, 1.2/zoom, 1.2/zoom));
-
-      // Reentry
-      reentryTrail.forEach(t => {
-        t.age -= 1;
-        stroke(255, 100, 0, t.age); strokeWeight(3/zoom); point(t.pos.x, t.pos.y);
+      // Trajectories
+      noFill(); strokeWeight(3/zoom);
+      beginShape();
+      traj.forEach(p => {
+        if (p.inSOI) {
+          stroke(0, 200, 255);
+          // Anchor the line to the CURRENT moon position
+          vertex(mP.x + p.relPos.x, mP.y + p.relPos.y);
+        } else {
+          stroke(255, 60, 150, 180);
+          vertex(p.pos.x, p.pos.y);
+        }
       });
+      endShape();
 
-      // Camera & Ship
+      // Debris & Reentry
+      fragments.forEach(f => { fill(f.col); rect(f.r.x, f.r.y, 1.5/zoom, 1.5/zoom); });
+      reentryTrail.forEach(t => { stroke(255, 150, 0, t.age); strokeWeight(4/zoom); point(t.pos.x, t.pos.y); t.age--; });
+
+      // Vessel
       if (!isCrashed) {
-        fill(255, 0, 0); noStroke(); circle(r.x, r.y, 7/zoom);
+        fill(255, 0, 0); noStroke(); circle(r.x, r.y, 8/zoom);
         let target = (p5.Vector.dist(r, mP) < MOON_SOI) ? mP : r;
-        camPos.x = lerp(camPos.x, target.x, 0.1);
-        camPos.y = lerp(camPos.y, target.y, 0.1);
+        camPos.x = lerp(camPos.x, target.x, 0.1); camPos.y = lerp(camPos.y, target.y, 0.1);
       } else if (fragments.length > 0) {
-        camPos.x = lerp(camPos.x, fragments[0].r.x, 0.05);
-        camPos.y = lerp(camPos.y, fragments[0].r.y, 0.05);
+        camPos.x = lerp(camPos.x, fragments[0].r.x, 0.05); camPos.y = lerp(camPos.y, fragments[0].r.y, 0.05);
       }
       pop();
 
       // UI
-      fill(255); noStroke(); textSize(18);
-      text(`WARP: ${currentWarp}x | ZOOM: ${zoom.toFixed(2)}x\n${isCrashed ? "VESSEL DESTROYED - 'R' TO RESET" : "SYSTEMS NOMINAL"}`, 25, 45);
+      resetMatrix(); fill(255); noStroke(); textSize(18); textFont('monospace');
+      text(`WARP: ${currentWarp}x\nZOOM: ${zoom.toFixed(2)}x\n${isCrashed ? "!! COLLISION DETECTED - 'R' TO RESET !!" : "VEL: " + v.mag().toFixed(1)}`, 30, 40);
     }
 
-    // --- INPUTS ---
-    function mouseWheel(e) { zoom = constrain(zoom * (1 - e.delta * 0.001), 0.005, 5); return false; }
-    
-    let pDist = 0;
-    function touchMoved() {
-      if (touches.length === 2) {
-        let d = dist(touches[0].x, touches[0].y, touches[1].x, touches[1].y);
-        if (pDist > 0) zoom = constrain(zoom * (d / pDist), 0.005, 5);
-        pDist = d;
-      }
-      return false;
-    }
-    function touchEnd() { pDist = 0; }
-
+    function mouseWheel(e) { zoom = constrain(zoom * (1 - e.delta * 0.001), 0.002, 5); return false; }
     function keyPressed() {
       if (keyCode === 190) warpIndex = min(warpIndex + 1, warpLevels.length - 1);
       if (keyCode === 188) warpIndex = max(warpIndex - 1, 0);
